@@ -87,6 +87,8 @@ export default function App() {
   const [showModels, setShowModels] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [listening, setListening] = useState(false);
+  const recRef = useRef<{ stop: () => void } | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentSel, setAgentSel] = useState("");
 
@@ -398,6 +400,48 @@ export default function App() {
     setConvs((prev) => prev.map((x) => (x.id === id ? { ...x, title: name.trim() } : x)));
   }
 
+  function toggleMic() {
+    const w = window as unknown as Record<string, unknown>;
+    const SR = (w.SpeechRecognition ?? w.webkitSpeechRecognition) as
+      | (new () => {
+          lang: string;
+          interimResults: boolean;
+          continuous: boolean;
+          onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void;
+          onend: () => void;
+          onerror: (e: { error: string }) => void;
+          start: () => void;
+          stop: () => void;
+        })
+      | undefined;
+    if (!SR) {
+      setError("Spraakinvoer werkt niet in deze browser. Probeer Chrome of Safari.");
+      return;
+    }
+    if (listening) {
+      recRef.current?.stop();
+      return;
+    }
+    const base = input;
+    const rec = new SR();
+    rec.lang = "nl-NL";
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.onresult = (e) => {
+      let t = "";
+      for (const r of Array.from(e.results)) t += r[0].transcript;
+      setInput(base ? `${base} ${t}` : t);
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = (e) => {
+      setListening(false);
+      if (e.error !== "no-speech" && e.error !== "aborted") setError(`Spraak: ${e.error}`);
+    };
+    recRef.current = rec;
+    rec.start();
+    setListening(true);
+  }
+
   function saveModels(p: ProviderConfig[]) {
     setProviders(p);
     saveProviders(p);
@@ -543,6 +587,15 @@ export default function App() {
                 📎
                 <input type="file" multiple style={{ display: "none" }} onChange={(e) => onFiles(e.target.files)} />
               </label>
+              <button
+                type="button"
+                className="attach"
+                title={listening ? "Stop met luisteren" : "Spreek je bericht in"}
+                onClick={toggleMic}
+                style={{ color: listening ? "var(--danger)" : undefined }}
+              >
+                🎙
+              </button>
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -626,6 +679,16 @@ export default function App() {
       )}
     </div>
   );
+}
+
+/** Leest een antwoord voor; code en Markdown-tekens worden overgeslagen. */
+function speak(text: string) {
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const clean = text.replace(/```[\s\S]*?```/g, " ").replace(/[*_`#>|]/g, "").replace(/\s+/g, " ").trim();
+  const u = new SpeechSynthesisUtterance(clean);
+  u.lang = "nl-NL";
+  window.speechSynthesis.speak(u);
 }
 
 function MessageView({
@@ -718,7 +781,10 @@ function MessageView({
           </button>
         )}
         {m.role === "assistant" && m.content && (
-          <button className="link" onClick={() => navigator.clipboard.writeText(m.content)}>Kopieer</button>
+          <>
+            <button className="link" onClick={() => navigator.clipboard.writeText(m.content)}>Kopieer</button>
+            <button className="link" title="Voorlezen" onClick={() => speak(m.content)}>🔊</button>
+          </>
         )}
         {m.role === "assistant" && isLast && (
           <button className="link" disabled={disabled} onClick={onRegenerate}>↻ Opnieuw</button>
