@@ -63,6 +63,14 @@ export default function SettingsDialog({ providers, tools, onSave, onClose }: Pr
       // Gebruik een net ingevoerde key, anders de opgeslagen key
       let apiKey = d.newKey?.trim() ?? "";
       if (!apiKey && d.apiKeyEnc && !d.clearKey) apiKey = await decryptSecret(d.apiKeyEnc);
+      const isLocal = d.baseUrl.includes("localhost") || d.baseUrl.includes("127.0.0.1");
+      if (!apiKey && !isLocal) {
+        update(i, {
+          fetching: false,
+          fetchErr: `Er is geen API-key voor ${d.name}. Plak de key van deze provider in het veld "API-key" en tik opnieuw op Modellen ophalen. Een OpenRouter-key werkt alleen bij het OpenRouter-blok.`,
+        });
+        return;
+      }
       const res = await fetch("/api/models", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
