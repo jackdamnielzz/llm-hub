@@ -195,3 +195,9 @@ input[type="text"]:focus, input[type="password"]:focus, textarea:focus, select:f
 /* Knoppen en vakjes in het thema */
 button.attach { background: none; border: 0; padding: 6px 8px; }
 input[type="checkbox"] { accent-color: var(--accent); }
+
+/* Live status terwijl het model nog bezig is */
+.live { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 14px; }
+.live-line { display: flex; align-items: center; gap: 8px; }
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.1); } }

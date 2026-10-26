@@ -751,6 +751,19 @@ function speak(text: string) {
   window.speechSynthesis.speak(u);
 }
 
+/** Wat het model op dit moment doet, zolang er nog geen antwoordtekst is. */
+function LiveStatus({ steps, thinking }: { steps: string[]; thinking: string }) {
+  const last = steps[steps.length - 1];
+  return (
+    <div className="live">
+      <div className="live-line">
+        <span className="pulse" aria-hidden="true" />
+        <span>{last ?? (thinking ? "Denkt na…" : "Bezig met antwoorden…")}</span>
+      </div>
+    </div>
+  );
+}
+
 function MessageView({
   m,
   artifacts,
@@ -804,19 +817,19 @@ function MessageView({
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripArtifactBlocks(m.content)}</ReactMarkdown>
             </div>
           ) : (
-            <span className="dots">…</span>
+            <LiveStatus steps={m.steps ?? []} thinking={m.thinking ?? ""} />
           )
         ) : (
           <div className="plain">{m.content}</div>
         )}
         {m.thinking && (
-          <details className="steps">
+          <details className="steps" open={!m.content || undefined}>
             <summary>Denkproces ({m.thinking.length} tekens)</summary>
             <div className="plain thinking">{m.thinking}</div>
           </details>
         )}
         {m.steps && m.steps.length > 0 && (
-          <details className="steps">
+          <details className="steps" open={!m.content || undefined}>
             <summary>
               {m.steps.length} {m.steps.length === 1 ? "stap" : "stappen"} · tik om te zien wat het model deed
             </summary>
