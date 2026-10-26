@@ -145,6 +145,10 @@ button:disabled { opacity: 0.5; cursor: default; }
   .composer { padding: 8px 8px calc(10px + env(safe-area-inset-bottom)); }
   .row textarea { font-size: 16px; } /* voorkomt inzoomen op iOS */
   .artifact-panel { position: fixed; inset: 0; width: 100%; min-width: 0; z-index: 45; }
+  .artifact-head { flex-wrap: wrap; gap: 6px; }
+  .artifact-head .title { flex: 1 1 100%; }
+  .artifact-head .artifact-model { flex: 1 1 0; min-width: 0; max-width: none; }
+  .artifact-head button { padding: 6px 8px; font-size: 13px; }
   .modal { max-height: 100dvh; border-radius: 0; }
   .overlay { padding: 0; }
   .field input, .field textarea, .field select { font-size: 16px; }
@@ -173,3 +177,21 @@ button:disabled { opacity: 0.5; cursor: default; }
 .artifact-model { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px; max-width: 160px; font-size: 13px; }
 
 .thinking { font-size: 13px; color: var(--muted); }
+.search { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; width: 100%; margin-bottom: 4px; }
+.search::placeholder { color: var(--muted); }
+
+/* Donkere invoervelden overal (ook in Modellen en Agenten) */
+input[type="text"], input[type="password"], input:not([type]), textarea, select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  outline: none;
+}
+input[type="text"]:focus, input[type="password"]:focus, textarea:focus, select:focus { border-color: var(--accent); }
+/* Projecten in de zijbalk niet laten uitrekken */
+.sidebar > .item { flex: none; }
+/* Knoppen en vakjes in het thema */
+button.attach { background: none; border: 0; padding: 6px 8px; }
+input[type="checkbox"] { accent-color: var(--accent); }

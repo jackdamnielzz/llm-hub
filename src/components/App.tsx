@@ -19,7 +19,7 @@ import {
 import { decryptSecret } from "@/lib/crypto";
 import { readFile } from "@/lib/files";
 import { uid } from "@/lib/id";
-import { extractArtifacts, artifactSrcDoc, fileNameFor, type Artifact } from "@/lib/artifacts";
+import { extractArtifacts, artifactSrcDoc, fileNameFor, stripArtifactBlocks, type Artifact } from "@/lib/artifacts";
 import SettingsDialog from "./SettingsDialog";
 import ModelsPanel from "./ModelsPanel";
 import AgentsPanel from "./AgentsPanel";
@@ -88,6 +88,7 @@ export default function App() {
   const [showAgents, setShowAgents] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [listening, setListening] = useState(false);
+  const [search, setSearch] = useState("");
   const recRef = useRef<{ stop: () => void } | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentSel, setAgentSel] = useState("");
@@ -409,6 +410,21 @@ export default function App() {
     });
   }
 
+  function exportChat() {
+    if (!active) return;
+    const lines = [`# ${active.title}`, ""];
+    for (const m of active.messages) {
+      lines.push(m.role === "user" ? "## Jij" : "## Model", "", m.content, "");
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${active.title.replace(/[^\w\- ]+/g, "").trim() || "chat"}.md`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function renameConv(id: string) {
     const c = convs.find((x) => x.id === id);
     const name = window.prompt("Nieuwe naam voor deze chat", c?.title ?? "");
@@ -500,8 +516,21 @@ export default function App() {
         ))}
 
         <div className="section"><span>Chats</span></div>
+        <input
+          className="search"
+          placeholder="Zoek in chats"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
         <div className="list">
-          {convs.map((c) => (
+          {convs
+            .filter((c) => c.messages.length > 0 || c.id === activeId)
+            .filter((c) => {
+              const q = search.trim().toLowerCase();
+              if (!q) return true;
+              return c.title.toLowerCase().includes(q) || c.messages.some((m) => m.content.toLowerCase().includes(q));
+            })
+            .map((c) => (
             <div key={c.id} className={`item-row ${c.id === activeId ? "active" : ""}`}>
               <button
                 className="item"
@@ -543,6 +572,9 @@ export default function App() {
             ))}
           </select>
           {project && <span className="tag">📁 {project.name}</span>}
+          {active && active.messages.length > 0 && (
+            <button className="ghost" onClick={exportChat} title="Chat downloaden als Markdown">⬇ Chat</button>
+          )}
           <label className="toggle" title="Het model denkt eerst na (alleen Anthropic-modellen)">
             <input
               type="checkbox"
@@ -769,7 +801,7 @@ function MessageView({
         ) : m.role === "assistant" ? (
           m.content ? (
             <div className="markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripArtifactBlocks(m.content)}</ReactMarkdown>
             </div>
           ) : (
             <span className="dots">…</span>

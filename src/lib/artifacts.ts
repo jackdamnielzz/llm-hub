@@ -21,6 +21,41 @@ function kindOf(lang: string): ArtifactKind {
 
 const ALWAYS_ARTIFACT = new Set(["html", "svg", "jsx", "tsx", "react", "markdown", "md", "mermaid"]);
 
+const LABEL: Record<ArtifactKind, string> = {
+  html: "Webpagina",
+  svg: "Afbeelding",
+  react: "App",
+  markdown: "Document",
+  mermaid: "Diagram",
+  code: "Code",
+};
+
+function isArtifactBlock(lang: string, code: string): boolean {
+  if (code.trim().length < 20) return false;
+  return ALWAYS_ARTIFACT.has(lang) || code.split("\n").length >= 15;
+}
+
+/** Een leesbare titel uit de inhoud, anders leeg. */
+function deriveTitle(kind: ArtifactKind, code: string): string {
+  const clean = (t: string) => t.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
+  if (kind === "html") {
+    const t = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(code)?.[1] ?? /<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i.exec(code)?.[1];
+    return t ? clean(t) : "";
+  }
+  if (kind === "markdown") {
+    const h = /^#\s+(.+)$/m.exec(code)?.[1];
+    return h ? clean(h) : "";
+  }
+  return "";
+}
+
+/** Haalt de artifact-blokken uit een tekst, zodat alleen de knop getoond wordt. */
+export function stripArtifactBlocks(content: string): string {
+  return content.replace(/```([\w+-]*)\n([\s\S]*?)```/g, (full, lang: string, code: string) =>
+    isArtifactBlock(lang.toLowerCase(), code) ? "" : full,
+  );
+}
+
 /** Haalt codeblokken uit een antwoord die als artifact getoond kunnen worden. */
 export function extractArtifacts(messageId: string, content: string): Artifact[] {
   const out: Artifact[] = [];
@@ -30,12 +65,12 @@ export function extractArtifacts(messageId: string, content: string): Artifact[]
   while ((m = FENCE.exec(content))) {
     const lang = m[1].toLowerCase();
     const code = m[2];
-    if (code.trim().length < 20) continue;
     // Korte snippets blijven inline; alleen lange of speciale blokken worden een artifact
-    if (!ALWAYS_ARTIFACT.has(lang) && code.split("\n").length < 15) continue;
+    if (!isArtifactBlock(lang, code)) continue;
     const kind = kindOf(lang);
     i++;
-    out.push({ id: `${messageId}-${i}`, title: `${kind === "code" ? lang || "code" : kind} ${i}`, kind, lang, code });
+    const title = deriveTitle(kind, code) || (kind === "code" ? `${lang || "Code"} ${i}` : `${LABEL[kind]} ${i}`);
+    out.push({ id: `${messageId}-${i}`, title, kind, lang, code });
   }
   return out;
 }
