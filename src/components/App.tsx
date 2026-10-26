@@ -78,6 +78,14 @@ export default function App() {
   const [modelKey, setModelKey] = useState("");
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<Attachment[]>([]);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Het invoerveld groeit mee met de tekst, tot het maximum uit de CSS (200px)
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -657,6 +665,7 @@ export default function App() {
                 🎙
               </button>
               <textarea
+                ref={composerRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -666,7 +675,7 @@ export default function App() {
                   }
                 }}
                 placeholder="Stel je vraag…"
-                rows={1}
+                rows={2}
               />
               {busy ? (
                 <button type="button" className="stop" onClick={() => abortRef.current?.abort()}>Stop</button>

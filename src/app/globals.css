@@ -10,6 +10,13 @@
 }
 
 * { box-sizing: border-box; }
+/* Donkere scrollbalken passend bij het thema */
+:root { color-scheme: dark; scrollbar-width: thin; scrollbar-color: #4a4a52 transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #4a4a52; border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #5c5c66; background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg);
@@ -92,7 +99,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .row { display: flex; align-items: flex-end; gap: 8px; }
 .row textarea {
   flex: 1; background: none; border: 0; outline: none; resize: none; max-height: 200px;
-  padding: 8px 6px; line-height: 1.4;
+  min-height: 52px; padding: 10px 6px; line-height: 1.4; overflow-y: auto;
 }
 .attach { cursor: pointer; padding: 6px 8px; font-size: 18px; color: var(--muted); }
 .send { background: var(--text); color: var(--bg); border: 0; border-radius: 10px; padding: 8px 14px; font-weight: 600; }
