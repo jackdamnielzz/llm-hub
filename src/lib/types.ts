@@ -27,6 +27,8 @@ export interface ChatMessage {
   content: string;
   attachments?: Attachment[];
   createdAt: number;
+  /** Stappen die het model zette, bijv. "🔎 Zoekt: …". Alleen voor weergave, niet naar het model. */
+  steps?: string[];
   /** Bronnen die het model gebruikte via webzoeken of het ophalen van pagina's */
   sources?: { title: string; url: string }[];
 }

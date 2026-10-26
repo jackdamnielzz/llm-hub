@@ -153,3 +153,12 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* Modellijst in instellingen */
 .model-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
 .model-row { word-break: break-all; color: var(--text); }
+
+.status { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+.steps { margin-top: 8px; font-size: 13px; color: var(--muted); }
+.steps summary { cursor: pointer; list-style: none; padding: 4px 0; }
+.steps summary::-webkit-details-marker { display: none; }
+.steps summary::before { content: "▸ "; }
+.steps[open] summary::before { content: "▾ "; }
+.steps ol { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; word-break: break-all; }

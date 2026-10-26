@@ -18,20 +18,32 @@ interface Body {
   model: string;
   system?: string;
   messages: Turn[];
-  /** Als aanwezig (met Brave-key) krijgt het model de web-tools. */
+  /** Als aanwezig krijgt het model de web-tools. */
   braveKey?: string;
 }
 
+type Event =
+  | { t: "text"; v: string }
+  | { t: "status"; v: string }
+  | { t: "source"; v: Source }
+  | { t: "error"; v: string };
+
+interface Call {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  raw: string;
+}
+
 const MAX_TOOL_ROUNDS = 5;
+const enc = new TextEncoder();
 
 function parseDataUrl(u: string) {
   const m = /^data:(.+?);base64,(.*)$/.exec(u);
   return m ? { mediaType: m[1], data: m[2] } : null;
 }
 
-// ---------- Anthropic ----------
-
-function anthropicMessages(turns: Turn[]) {
+function anthropicMessages(turns: Turn[]): unknown[] {
   return turns.map((t) => ({
     role: t.role,
     content: t.images?.length
@@ -46,9 +58,7 @@ function anthropicMessages(turns: Turn[]) {
   }));
 }
 
-// ---------- OpenAI-compatible ----------
-
-function openaiMessages(system: string | undefined, turns: Turn[]) {
+function openaiMessages(system: string | undefined, turns: Turn[]): unknown[] {
   const msgs: unknown[] = [];
   if (system) msgs.push({ role: "system", content: system });
   for (const t of turns) {
@@ -78,157 +88,218 @@ function headers(body: Body): Record<string, string> {
   return h;
 }
 
-// ---------- Tool-loop (niet-streamend) ----------
+async function callUpstream(body: Body, payload: unknown, signal: AbortSignal): Promise<Response> {
+  const res = await fetch(endpoint(body), {
+    method: "POST",
+    headers: headers(body),
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Provider gaf ${res.status}: ${(await res.text()).slice(0, 500)}`);
+  return res;
+}
 
-async function completeWithTools(body: Body, signal: AbortSignal): Promise<{ text: string; sources: Source[] }> {
-  const sources: Source[] = [];
-  const isAnthropic = body.kind === "anthropic";
+/** Leest de SSE-stream van een provider en geeft elk JSON-event door. */
+async function* sseEvents(res: Response): AsyncGenerator<any> {
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line.startsWith("data:")) continue;
+      const d = line.slice(5).trim();
+      if (!d || d === "[DONE]") continue;
+      yield JSON.parse(d);
+    }
+  }
+}
 
-  // Gesprek in het formaat van de provider
-  const anthropicConv: unknown[] = isAnthropic ? anthropicMessages(body.messages) : [];
-  const openaiConv: unknown[] = isAnthropic ? [] : openaiMessages(body.system, body.messages);
+// ---------- Eén ronde bij Anthropic (streamt tekst meteen door) ----------
 
-  const anthropicTools = TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
-  const openaiTools = TOOL_DEFS.map((t) => ({
-    type: "function",
-    function: { name: t.name, description: t.description, parameters: t.parameters },
-  }));
+async function anthropicRound(body: Body, conv: unknown[], allowTools: boolean, signal: AbortSignal, emit: (e: Event) => void) {
+  const res = await callUpstream(
+    body,
+    {
+      model: body.model,
+      max_tokens: 4096,
+      stream: true,
+      system: body.system || undefined,
+      messages: conv,
+      ...(allowTools
+        ? { tools: TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) }
+        : {}),
+    },
+    signal,
+  );
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS + 1; round++) {
-    const allowTools = round < MAX_TOOL_ROUNDS;
-
-    if (isAnthropic) {
-      const res = await fetch(endpoint(body), {
-        method: "POST",
-        headers: headers(body),
-        signal,
-        body: JSON.stringify({
-          model: body.model,
-          max_tokens: 4096,
-          system: body.system || undefined,
-          messages: anthropicConv,
-          ...(allowTools ? { tools: anthropicTools } : {}),
-        }),
-      });
-      if (!res.ok) throw new Error((await res.text()) || res.statusText);
-      const data = (await res.json()) as {
-        content: { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[];
-        stop_reason: string;
-      };
-      const toolUses = data.content.filter((c) => c.type === "tool_use");
-      if (data.stop_reason !== "tool_use" || toolUses.length === 0) {
-        return { text: data.content.filter((c) => c.type === "text").map((c) => c.text ?? "").join(""), sources };
-      }
-      anthropicConv.push({ role: "assistant", content: data.content });
-      const results = [];
-      for (const tu of toolUses) {
-        const out = await runTool(tu.name!, tu.input ?? {}, body.braveKey, sources);
-        results.push({ type: "tool_result", tool_use_id: tu.id, content: out });
-      }
-      anthropicConv.push({ role: "user", content: results });
-    } else {
-      const res = await fetch(endpoint(body), {
-        method: "POST",
-        headers: headers(body),
-        signal,
-        body: JSON.stringify({
-          model: body.model,
-          messages: openaiConv,
-          ...(allowTools ? { tools: openaiTools } : {}),
-        }),
-      });
-      if (!res.ok) throw new Error((await res.text()) || res.statusText);
-      const data = (await res.json()) as {
-        choices: {
-          message: {
-            content: string | null;
-            tool_calls?: { id: string; function: { name: string; arguments: string } }[];
-          };
-        }[];
-      };
-      const msg = data.choices[0].message;
-      if (!msg.tool_calls?.length) return { text: msg.content ?? "", sources };
-      openaiConv.push({ role: "assistant", content: msg.content ?? null, tool_calls: msg.tool_calls });
-      for (const tc of msg.tool_calls) {
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(tc.function.arguments || "{}");
-        } catch {
-          /* ongeldige JSON: de tool krijgt lege argumenten */
-        }
-        const out = await runTool(tc.function.name, args, body.braveKey, sources);
-        openaiConv.push({ role: "tool", tool_call_id: tc.id, content: out });
+  const blocks: any[] = [];
+  for await (const ev of sseEvents(res)) {
+    if (ev.type === "error") throw new Error(ev.error?.message ?? "Upstream fout");
+    if (ev.type === "content_block_start") {
+      const b = ev.content_block;
+      blocks[ev.index] =
+        b.type === "tool_use"
+          ? { type: "tool_use", id: b.id, name: b.name, _json: "" }
+          : { type: "text", text: "" };
+    } else if (ev.type === "content_block_delta") {
+      const b = blocks[ev.index];
+      if (!b) continue;
+      if (ev.delta?.type === "text_delta") {
+        b.text += ev.delta.text;
+        emit({ t: "text", v: ev.delta.text });
+      } else if (ev.delta?.type === "input_json_delta") {
+        b._json += ev.delta.partial_json ?? "";
       }
     }
   }
-  return { text: "Er is een limiet bereikt voor het aantal zoekstappen.", sources };
+
+  const clean = blocks.filter(Boolean).map((b) => {
+    if (b.type === "tool_use") {
+      let input: Record<string, unknown> = {};
+      try {
+        input = JSON.parse(b._json || "{}");
+      } catch {
+        /* ongeldige JSON: lege argumenten */
+      }
+      return { type: "tool_use", id: b.id, name: b.name, input };
+    }
+    return { type: "text", text: b.text };
+  });
+  const calls: Call[] = clean
+    .filter((b) => b.type === "tool_use")
+    .map((b) => ({ id: b.id as string, name: b.name as string, args: b.input as Record<string, unknown>, raw: JSON.stringify(b.input) }));
+  return { blocks: clean.filter((b) => b.type !== "text" || b.text), calls };
 }
 
-// ---------- Streamen zonder tools ----------
+// ---------- Eén ronde bij OpenAI-compatibel ----------
 
-function extractDelta(kind: Body["kind"], obj: any): string {
-  if (kind === "anthropic") {
-    return obj.type === "content_block_delta" && obj.delta?.type === "text_delta" ? obj.delta.text ?? "" : "";
+async function openaiRound(body: Body, conv: unknown[], allowTools: boolean, signal: AbortSignal, emit: (e: Event) => void) {
+  const res = await callUpstream(
+    body,
+    {
+      model: body.model,
+      stream: true,
+      messages: conv,
+      ...(allowTools
+        ? {
+            tools: TOOL_DEFS.map((t) => ({
+              type: "function",
+              function: { name: t.name, description: t.description, parameters: t.parameters },
+            })),
+          }
+        : {}),
+    },
+    signal,
+  );
+
+  let text = "";
+  const tc: Record<number, { id: string; name: string; raw: string }> = {};
+  for await (const ev of sseEvents(res)) {
+    if (ev.error) throw new Error(ev.error.message ?? "Upstream fout");
+    const d = ev.choices?.[0]?.delta;
+    if (!d) continue;
+    if (d.content) {
+      text += d.content;
+      emit({ t: "text", v: d.content });
+    }
+    for (const c of d.tool_calls ?? []) {
+      const slot = (tc[c.index] ??= { id: "", name: "", raw: "" });
+      if (c.id) slot.id = c.id;
+      if (c.function?.name) slot.name += c.function.name;
+      if (c.function?.arguments) slot.raw += c.function.arguments;
+    }
   }
-  return obj.choices?.[0]?.delta?.content ?? "";
+
+  const calls: Call[] = Object.entries(tc)
+    .filter(([, c]) => c.name)
+    .map(([idx, c]) => {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(c.raw || "{}");
+      } catch {
+        /* ongeldige JSON: lege argumenten */
+      }
+      return { id: c.id || `call_${idx}`, name: c.name, args, raw: c.raw || "{}" };
+    });
+  return { text, calls };
 }
 
-function streamPlain(body: Body, signal: AbortSignal): Response {
-  const payload =
-    body.kind === "anthropic"
-      ? {
-          model: body.model,
-          max_tokens: 4096,
-          stream: true,
-          system: body.system || undefined,
-          messages: anthropicMessages(body.messages),
-        }
-      : { model: body.model, stream: true, messages: openaiMessages(body.system, body.messages) };
+// ---------- Hoofdloop ----------
 
-  const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
+function statusFor(name: string, args: Record<string, unknown>): string {
+  if (name === "web_search") return `🔎 Zoekt: ${String(args.query ?? "")}`;
+  if (name === "fetch_url") return `📄 Leest: ${String(args.url ?? "")}`;
+  return `🔧 ${name}`;
+}
+
+async function run(body: Body, emit: (e: Event) => void, signal: AbortSignal) {
+  const isA = body.kind === "anthropic";
+  const conv: unknown[] = isA ? anthropicMessages(body.messages) : openaiMessages(body.system, body.messages);
+  const sources: Source[] = [];
+
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const allowTools = !!body.braveKey && round < MAX_TOOL_ROUNDS;
+    const result = isA
+      ? await anthropicRound(body, conv, allowTools, signal, emit)
+      : await openaiRound(body, conv, allowTools, signal, emit);
+
+    if (result.calls.length === 0) return; // tekst is al doorgestreamd
+
+    // Sla het assistent-bericht met de tool-aanvragen op, zodat het model context houdt
+    const outputs: string[] = [];
+    for (const c of result.calls) {
+      emit({ t: "status", v: statusFor(c.name, c.args) });
+      const before = sources.length;
+      outputs.push(await runTool(c.name, c.args, body.braveKey, sources));
+      for (const s of sources.slice(before)) emit({ t: "source", v: s });
+    }
+
+    if (isA) {
+      const r = result as Awaited<ReturnType<typeof anthropicRound>>;
+      conv.push({ role: "assistant", content: r.blocks });
+      conv.push({
+        role: "user",
+        content: result.calls.map((c, i) => ({ type: "tool_result", tool_use_id: c.id, content: outputs[i] })),
+      });
+    } else {
+      const r = result as Awaited<ReturnType<typeof openaiRound>>;
+      conv.push({
+        role: "assistant",
+        content: r.text || null,
+        tool_calls: result.calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.raw } })),
+      });
+      result.calls.forEach((c, i) => conv.push({ role: "tool", tool_call_id: c.id, content: outputs[i] }));
+    }
+  }
+  emit({ t: "text", v: "\n\n[Limiet van zoekstappen bereikt]" });
+}
+
+export async function POST(req: NextRequest) {
+  const body = (await req.json()) as Body;
+  if (!/^https?:\/\//.test(body.baseUrl)) {
+    return Response.json({ error: "Ongeldige base URL" }, { status: 400 });
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const push = (t: string) => {
+      const emit = (e: Event) => {
         try {
-          controller.enqueue(encoder.encode(t));
+          controller.enqueue(enc.encode(JSON.stringify(e) + "\n"));
         } catch {
           /* client is weg */
         }
       };
       try {
-        const upstream = await fetch(endpoint(body), {
-          method: "POST",
-          headers: headers(body),
-          body: JSON.stringify(payload),
-          signal,
-        });
-        if (!upstream.ok || !upstream.body) {
-          push(`\n\n[Fout ${upstream.status}: ${(await upstream.text()).slice(0, 500)}]`);
-          return;
-        }
-        const reader = upstream.body.getReader();
-        let buf = "";
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          let idx: number;
-          while ((idx = buf.indexOf("\n")) !== -1) {
-            const line = buf.slice(0, idx).trim();
-            buf = buf.slice(idx + 1);
-            if (!line.startsWith("data:")) continue;
-            const data = line.slice(5).trim();
-            if (!data || data === "[DONE]") continue;
-            const obj = JSON.parse(data);
-            if (obj.type === "error") throw new Error(obj.error?.message ?? "Upstream fout");
-            const text = extractDelta(body.kind, obj);
-            if (text) push(text);
-          }
-        }
+        await run(body, emit, req.signal);
       } catch (e) {
-        push(`\n\n[Fout: ${(e as Error).message}]`);
+        emit({ t: "error", v: (e as Error).message });
       } finally {
         try {
           controller.close();
@@ -240,26 +311,6 @@ function streamPlain(body: Body, signal: AbortSignal): Response {
   });
 
   return new Response(stream, {
-    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache" },
+    headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache" },
   });
-}
-
-// ---------- Handler ----------
-
-export async function POST(req: NextRequest) {
-  const body = (await req.json()) as Body;
-  if (!/^https?:\/\//.test(body.baseUrl)) {
-    return Response.json({ error: "Ongeldige base URL" }, { status: 400 });
-  }
-
-  if (body.braveKey) {
-    try {
-      const result = await completeWithTools(body, req.signal);
-      return Response.json(result);
-    } catch (e) {
-      return Response.json({ error: (e as Error).message }, { status: 502 });
-    }
-  }
-
-  return streamPlain(body, req.signal);
 }

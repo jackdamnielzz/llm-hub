@@ -186,14 +186,19 @@ export default function App() {
     if (activeId === id) setActiveId(null);
   }
 
-  function appendToAssistant(convId: string, asstId: string, chunk: string) {
+  function updateAssistant(convId: string, asstId: string, fn: (m: ChatMessage) => ChatMessage) {
     setConvs((prev) =>
       prev.map((c) =>
-        c.id !== convId
-          ? c
-          : { ...c, messages: c.messages.map((m) => (m.id === asstId ? { ...m, content: m.content + chunk } : m)) },
+        c.id !== convId ? c : { ...c, messages: c.messages.map((m) => (m.id === asstId ? fn(m) : m)) },
       ),
     );
+  }
+
+  function applyEvent(convId: string, asstId: string, ev: { t: string; v: any }) {
+    if (ev.t === "text") updateAssistant(convId, asstId, (m) => ({ ...m, content: m.content + ev.v }));
+    else if (ev.t === "status") updateAssistant(convId, asstId, (m) => ({ ...m, steps: [...(m.steps ?? []), ev.v] }));
+    else if (ev.t === "source") updateAssistant(convId, asstId, (m) => ({ ...m, sources: [...(m.sources ?? []), ev.v] }));
+    else if (ev.t === "error") throw new Error(ev.v);
   }
 
   async function onFiles(list: FileList | null) {
@@ -290,34 +295,21 @@ export default function App() {
         body: JSON.stringify(payload),
         signal: ctrl.signal,
       });
+      if (!res.ok || !res.body) throw new Error((await res.text()) || res.statusText);
 
-      if (braveKey) {
-        // Tool-pad: één JSON-antwoord met bronnen
-        const data = await res.json();
-        if (!res.ok || data.error) throw new Error(data.error ?? res.statusText);
-        setConvs((prev) =>
-          prev.map((c) =>
-            c.id !== convId
-              ? c
-              : {
-                  ...c,
-                  messages: c.messages.map((m) =>
-                    m.id === asstId ? { ...m, content: data.text, sources: data.sources } : m,
-                  ),
-                },
-          ),
-        );
-      } else {
-        if (!res.ok || !res.body) {
-          const msg = await res.text();
-          throw new Error(msg || res.statusText);
-        }
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          appendToAssistant(convId, asstId, dec.decode(value, { stream: true }));
+      // Elke regel is een JSON-event: tekst, status, bron of fout
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i: number;
+        while ((i = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, i);
+          buf = buf.slice(i + 1);
+          if (line.trim()) applyEvent(convId, asstId, JSON.parse(line));
         }
       }
     } catch (e) {
@@ -569,6 +561,18 @@ function MessageView({
           )
         ) : (
           <div className="plain">{m.content}</div>
+        )}
+        {m.steps && m.steps.length > 0 && (
+          <details className="steps">
+            <summary>
+              {m.steps.length} {m.steps.length === 1 ? "stap" : "stappen"} · tik om te zien wat het model deed
+            </summary>
+            <ol>
+              {m.steps.map((st, i) => (
+                <li key={i}>{st}</li>
+              ))}
+            </ol>
+          </details>
         )}
         {m.sources && m.sources.length > 0 && (
           <div className="sources">

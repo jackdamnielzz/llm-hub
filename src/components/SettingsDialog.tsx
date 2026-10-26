@@ -57,7 +57,7 @@ export default function SettingsDialog({ providers, tools, onSave, onClose }: Pr
         <div className="modal-body">
           <p className="hint">
             Keys worden versleuteld in deze browser opgeslagen en per verzoek naar de provider gestuurd via de
-            server van deze app. Modellen kies je daarna in het menu onder Modellen.
+            server van deze app. Modellen kies je daarna in het menu onder Modellen. Antwoorden verschijnen stap voor stap, ook als webzoeken aan staat.
           </p>
 
           {drafts.map((d, i) => (
