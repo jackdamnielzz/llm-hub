@@ -27,6 +27,8 @@ export interface ChatMessage {
   content: string;
   attachments?: Attachment[];
   createdAt: number;
+  /** Denkproces van het model (extended thinking), alleen voor weergave */
+  thinking?: string;
   /** Stappen die het model zette, bijv. "🔎 Zoekt: …". Alleen voor weergave, niet naar het model. */
   steps?: string[];
   /** Bronnen die het model gebruikte via webzoeken of het ophalen van pagina's */
@@ -66,4 +68,6 @@ export interface Project {
 export interface ToolSettings {
   webSearchEnabled: boolean;
   braveKeyEnc?: string;
+  /** Extended thinking aan (alleen Anthropic-modellen) */
+  thinking?: boolean;
 }

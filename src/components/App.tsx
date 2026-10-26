@@ -134,9 +134,19 @@ export default function App() {
     [providers],
   );
 
+  // Een provider is "klaar" als er een key staat (of het een lokaal endpoint is)
+  const isReady = (key: string) => {
+    const p = providers.find((x) => x.id === key.split("|")[0]);
+    return !!p && (!!p.apiKeyEnc || p.baseUrl.includes("localhost") || p.baseUrl.includes("127.0.0.1"));
+  };
+  const readyOptions = modelOptions.filter((o) => isReady(o.key));
+  const defaultKey = readyOptions[0]?.key ?? modelOptions[0]?.key ?? "";
+
   const currentKey = active
     ? `${active.providerId}|${active.model}`
-    : modelKey || modelOptions[0]?.key || "";
+    : modelKey && modelOptions.some((o) => o.key === modelKey)
+      ? modelKey
+      : defaultKey;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -213,6 +223,7 @@ export default function App() {
     if (ev.t === "text") updateAssistant(convId, asstId, (m) => ({ ...m, content: m.content + ev.v }));
     else if (ev.t === "status") updateAssistant(convId, asstId, (m) => ({ ...m, steps: [...(m.steps ?? []), ev.v] }));
     else if (ev.t === "source") updateAssistant(convId, asstId, (m) => ({ ...m, sources: [...(m.sources ?? []), ev.v] }));
+    else if (ev.t === "thinking") updateAssistant(convId, asstId, (m) => ({ ...m, thinking: (m.thinking ?? "") + ev.v }));
     else if (ev.t === "error") throw new Error(ev.v);
   }
 
@@ -237,6 +248,10 @@ export default function App() {
     const provider = providers.find((p) => p.id === o.providerId);
     if (!provider) {
       setError("Deze provider bestaat niet meer. Kies een ander model.");
+      return;
+    }
+    if (!isReady(`${o.providerId}|${o.model}`)) {
+      setError(`Er is nog geen API-key voor ${provider.name}. Plak die bij Instellingen & API-keys, of kies een model van een provider met een key.`);
       return;
     }
     const agent = agents.find((x) => x.id === o.agentId);
@@ -297,6 +312,7 @@ export default function App() {
           system,
           messages: turns,
           braveKey,
+          thinking: !!tools.thinking,
         }),
         signal: ctrl.signal,
       });
@@ -527,6 +543,18 @@ export default function App() {
             ))}
           </select>
           {project && <span className="tag">📁 {project.name}</span>}
+          <label className="toggle" title="Het model denkt eerst na (alleen Anthropic-modellen)">
+            <input
+              type="checkbox"
+              checked={!!tools.thinking}
+              onChange={(e) => {
+                const t = { ...tools, thinking: e.target.checked };
+                setTools(t);
+                saveTools(t);
+              }}
+            />
+            🧠 Denken
+          </label>
           <label className="toggle" title={webReady ? "" : "Voeg eerst een Brave-key toe in Instellingen"}>
             <input
               type="checkbox"
@@ -748,6 +776,12 @@ function MessageView({
           )
         ) : (
           <div className="plain">{m.content}</div>
+        )}
+        {m.thinking && (
+          <details className="steps">
+            <summary>Denkproces ({m.thinking.length} tekens)</summary>
+            <div className="plain thinking">{m.thinking}</div>
+          </details>
         )}
         {m.steps && m.steps.length > 0 && (
           <details className="steps">

@@ -20,12 +20,15 @@ interface Body {
   messages: Turn[];
   /** Als aanwezig krijgt het model de web-tools. */
   braveKey?: string;
+  /** Anthropic: het model denkt eerst na (extended thinking). */
+  thinking?: boolean;
 }
 
 type Event =
   | { t: "text"; v: string }
   | { t: "status"; v: string }
   | { t: "source"; v: Source }
+  | { t: "thinking"; v: string }
   | { t: "error"; v: string };
 
 interface Call {
@@ -128,10 +131,11 @@ async function anthropicRound(body: Body, conv: unknown[], allowTools: boolean, 
     body,
     {
       model: body.model,
-      max_tokens: 4096,
+      max_tokens: body.thinking ? 8192 : 4096,
       stream: true,
       system: body.system || undefined,
       messages: conv,
+      ...(body.thinking ? { thinking: { type: "enabled", budget_tokens: 4000 } } : {}),
       ...(allowTools
         ? { tools: TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) }
         : {}),
@@ -147,10 +151,21 @@ async function anthropicRound(body: Body, conv: unknown[], allowTools: boolean, 
       blocks[ev.index] =
         b.type === "tool_use"
           ? { type: "tool_use", id: b.id, name: b.name, _json: "" }
-          : { type: "text", text: "" };
+          : b.type === "thinking"
+            ? { type: "thinking", thinking: "", signature: "" }
+            : { type: "text", text: "" };
     } else if (ev.type === "content_block_delta") {
       const b = blocks[ev.index];
       if (!b) continue;
+      if (ev.delta?.type === "thinking_delta") {
+        b.thinking += ev.delta.thinking ?? "";
+        emit({ t: "thinking", v: ev.delta.thinking ?? "" });
+        continue;
+      }
+      if (ev.delta?.type === "signature_delta") {
+        b.signature += ev.delta.signature ?? "";
+        continue;
+      }
       if (ev.delta?.type === "text_delta") {
         b.text += ev.delta.text;
         emit({ t: "text", v: ev.delta.text });
@@ -161,6 +176,7 @@ async function anthropicRound(body: Body, conv: unknown[], allowTools: boolean, 
   }
 
   const clean = blocks.filter(Boolean).map((b) => {
+    if (b.type === "thinking") return { type: "thinking", thinking: b.thinking, signature: b.signature };
     if (b.type === "tool_use") {
       let input: Record<string, unknown> = {};
       try {
