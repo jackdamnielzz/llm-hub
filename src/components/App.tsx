@@ -19,6 +19,7 @@ import { readFile } from "@/lib/files";
 import { uid } from "@/lib/id";
 import { extractArtifacts, artifactSrcDoc, type Artifact } from "@/lib/artifacts";
 import SettingsDialog from "./SettingsDialog";
+import ModelsPanel from "./ModelsPanel";
 import ProjectDialog from "./ProjectDialog";
 
 interface Turn {
@@ -78,6 +79,7 @@ export default function App() {
   const [editingProject, setEditingProject] = useState<Project | "new" | null>(null);
   const [openArtifact, setOpenArtifact] = useState<Artifact | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showModels, setShowModels] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -299,6 +301,11 @@ export default function App() {
     }
   }
 
+  function saveModels(p: ProviderConfig[]) {
+    setProviders(p);
+    saveProviders(p);
+  }
+
   function saveProviderSettings(p: ProviderConfig[], t: ToolSettings) {
     setProviders(p);
     saveProviders(p);
@@ -355,6 +362,7 @@ export default function App() {
           ))}
         </div>
 
+        <button className="ghost" onClick={() => { setShowModels(true); setSidebarOpen(false); }}>🧩 Modellen</button>
         <button className="ghost" onClick={() => setShowSettings(true)}>⚙ Instellingen & API-keys</button>
       </aside>
 
@@ -450,6 +458,14 @@ export default function App() {
 
       {openArtifact && (
         <ArtifactPanel artifact={openArtifact} onClose={() => setOpenArtifact(null)} />
+      )}
+
+      {showModels && (
+        <ModelsPanel
+          providers={providers}
+          onSave={saveModels}
+          onClose={() => setShowModels(false)}
+        />
       )}
 
       {showSettings && (
