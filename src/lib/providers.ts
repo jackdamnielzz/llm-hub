@@ -49,6 +49,14 @@ export const DEFAULT_PROVIDERS: ProviderConfig[] = [
     enabled: true,
   },
   {
+    id: "venice",
+    name: "Venice",
+    kind: "openai-compatible",
+    baseUrl: "https://api.venice.ai/api/v1",
+    models: [],
+    enabled: true,
+  },
+  {
     id: "ollama",
     name: "Ollama (lokaal)",
     kind: "openai-compatible",
