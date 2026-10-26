@@ -77,6 +77,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | "new" | null>(null);
   const [openArtifact, setOpenArtifact] = useState<Artifact | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -320,8 +321,9 @@ export default function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <button className="primary" onClick={() => newChat()}>+ Nieuwe chat</button>
+      {sidebarOpen && <div className="scrim" onClick={() => setSidebarOpen(false)} />}
+      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+        <button className="primary" onClick={() => { newChat(); setSidebarOpen(false); }}>+ Nieuwe chat</button>
 
         <div className="section">
           <span>Projecten</span>
@@ -341,6 +343,7 @@ export default function App() {
                 className="item"
                 onClick={() => {
                   setActiveId(c.id);
+                  setSidebarOpen(false);
                   setError(null);
                   setOpenArtifact(null);
                 }}
@@ -357,6 +360,7 @@ export default function App() {
 
       <main className="main">
         <header className="topbar">
+          <button className="menu-btn" aria-label="Menu" onClick={() => setSidebarOpen(true)}>☰</button>
           <select value={currentKey} onChange={(e) => changeModel(e.target.value)}>
             {modelOptions.length === 0 && <option value="">Geen model beschikbaar</option>}
             {modelOptions.map((o) => (

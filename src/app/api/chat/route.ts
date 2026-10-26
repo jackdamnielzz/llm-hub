@@ -3,6 +3,7 @@ import { runTool, TOOL_DEFS, type Source } from "@/lib/server-tools";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60; // Vercel: webzoeken met meerdere stappen duurt langer dan 10 s
 
 interface Turn {
   role: "user" | "assistant";
