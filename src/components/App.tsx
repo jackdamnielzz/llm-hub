@@ -213,65 +213,56 @@ export default function App() {
     }
   }
 
-  async function send() {
-    if (busy) return;
-    const text = input.trim();
-    if (!text && pending.length === 0) return;
-
-    const sel = parseKey(currentKey);
-    const provider = sel && providers.find((p) => p.id === sel.providerId);
-    if (!sel || !provider) {
-      setError("Voeg eerst een provider met een model toe via Instellingen.");
-      setShowSettings(true);
+  /** Streamt een antwoord voor `base` (de berichten tot en met het laatste user-bericht). */
+  async function generate(
+    convId: string,
+    base: ChatMessage[],
+    o: { providerId: string; model: string; agentId?: string; isNew: boolean; title?: string },
+  ) {
+    const provider = providers.find((p) => p.id === o.providerId);
+    if (!provider) {
+      setError("Deze provider bestaat niet meer. Kies een ander model.");
       return;
     }
-
-    const webActive = (useAgent ? useAgent.webSearch : tools.webSearchEnabled) && !!tools.braveKeyEnc;
-    const convId = active?.id ?? uid();
-    const isNew = !active;
+    const agent = agents.find((x) => x.id === o.agentId);
+    const convProject = projects.find((p) => p.id === active?.projectId);
+    const webActive = (agent ? agent.webSearch : tools.webSearchEnabled) && !!tools.braveKeyEnc;
+    const system = buildSystem(convProject, webActive, agent?.systemPrompt);
     const asstId = uid();
-    const userMsg: ChatMessage = {
-      id: uid(),
-      role: "user",
-      content: text,
-      attachments: pending.length ? pending : undefined,
-      createdAt: Date.now(),
-    };
     const asstMsg: ChatMessage = { id: asstId, role: "assistant", content: "", createdAt: Date.now() };
-    const history = active?.messages ?? [];
-    const turns = toTurns([...history, userMsg]);
-    const system = buildSystem(project, webActive, useAgent?.systemPrompt);
-    const fallbackTitle = pending[0]?.name ?? "Nieuwe chat";
+    const turns = toTurns(base);
 
     setConvs((prev) => {
-      const base: Conversation[] = isNew
-        ? [
+      const exists = prev.some((c) => c.id === convId);
+      const next: Conversation[] = exists
+        ? prev
+        : [
             {
               id: convId,
-              title: titleFrom(text, fallbackTitle),
-              agentId: agentSel || undefined,
-              providerId: sel.providerId,
-              model: sel.model,
+              title: o.title ?? "Nieuwe chat",
+              agentId: o.agentId || undefined,
+              projectId: active?.projectId,
+              providerId: o.providerId,
+              model: o.model,
               messages: [],
               updatedAt: Date.now(),
             },
             ...prev,
-          ]
-        : prev;
-      return base.map((c) =>
+          ];
+      return next.map((c) =>
         c.id !== convId
           ? c
           : {
               ...c,
-              title: c.messages.length === 0 ? titleFrom(text, fallbackTitle) : c.title,
-              messages: [...c.messages, userMsg, asstMsg],
+              title: o.title ?? c.title,
+              providerId: o.providerId,
+              model: o.model,
+              messages: [...base, asstMsg],
               updatedAt: Date.now(),
             },
       );
     });
     setActiveId(convId);
-    setInput("");
-    setPending([]);
     setError(null);
     setBusy(true);
 
@@ -280,19 +271,18 @@ export default function App() {
     try {
       const apiKey = provider.apiKeyEnc ? await decryptSecret(provider.apiKeyEnc) : "";
       const braveKey = webActive && tools.braveKeyEnc ? await decryptSecret(tools.braveKeyEnc) : undefined;
-      const payload = {
-        kind: provider.kind,
-        baseUrl: provider.baseUrl,
-        apiKey,
-        model: sel.model,
-        system,
-        messages: turns,
-        braveKey,
-      };
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          kind: provider.kind,
+          baseUrl: provider.baseUrl,
+          apiKey,
+          model: o.model,
+          system,
+          messages: turns,
+          braveKey,
+        }),
         signal: ctrl.signal,
       });
       if (!res.ok || !res.body) throw new Error((await res.text()) || res.statusText);
@@ -324,6 +314,75 @@ export default function App() {
       setBusy(false);
       abortRef.current = null;
     }
+  }
+
+  async function send() {
+    if (busy) return;
+    const text = input.trim();
+    if (!text && pending.length === 0) return;
+
+    const sel = parseKey(currentKey);
+    if (!sel) {
+      setError("Voeg eerst een provider met een model toe via Instellingen.");
+      setShowSettings(true);
+      return;
+    }
+
+    const convId = active?.id ?? uid();
+    const userMsg: ChatMessage = {
+      id: uid(),
+      role: "user",
+      content: text,
+      attachments: pending.length ? pending : undefined,
+      createdAt: Date.now(),
+    };
+    const history = active?.messages ?? [];
+    const fallbackTitle = pending[0]?.name ?? "Nieuwe chat";
+    setInput("");
+    setPending([]);
+    await generate(convId, [...history, userMsg], {
+      providerId: sel.providerId,
+      model: sel.model,
+      agentId: active ? active.agentId : agentSel || undefined,
+      isNew: !active,
+      title: history.length === 0 ? titleFrom(text, fallbackTitle) : undefined,
+    });
+  }
+
+  /** Opnieuw genereren: het laatste antwoord vervangen door een nieuw. */
+  async function regenerate() {
+    if (busy || !active) return;
+    const lastUser = [...active.messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) return;
+    const idx = active.messages.indexOf(lastUser);
+    await generate(active.id, active.messages.slice(0, idx + 1), {
+      providerId: active.providerId,
+      model: active.model,
+      agentId: active.agentId,
+      isNew: false,
+    });
+  }
+
+  /** Bewerk een eigen bericht: alles erna wordt vervangen door een nieuw antwoord. */
+  async function editMessage(msgId: string, newText: string) {
+    if (busy || !active) return;
+    const idx = active.messages.findIndex((m) => m.id === msgId);
+    if (idx < 0) return;
+    const original = active.messages[idx];
+    const edited: ChatMessage = { ...original, id: uid(), content: newText, createdAt: Date.now() };
+    await generate(active.id, [...active.messages.slice(0, idx), edited], {
+      providerId: active.providerId,
+      model: active.model,
+      agentId: active.agentId,
+      isNew: false,
+    });
+  }
+
+  function renameConv(id: string) {
+    const c = convs.find((x) => x.id === id);
+    const name = window.prompt("Nieuwe naam voor deze chat", c?.title ?? "");
+    if (!name?.trim()) return;
+    setConvs((prev) => prev.map((x) => (x.id === id ? { ...x, title: name.trim() } : x)));
   }
 
   function saveModels(p: ProviderConfig[]) {
@@ -383,6 +442,7 @@ export default function App() {
               >
                 {c.title}
               </button>
+              <button className="icon" title="Hernoemen" onClick={() => renameConv(c.id)}>✎</button>
               <button className="icon" title="Verwijderen" onClick={() => deleteConv(c.id)}>✕</button>
             </div>
           ))}
@@ -429,12 +489,16 @@ export default function App() {
             {(!active || active.messages.length === 0) && (
               <div className="hero">Waar kan ik je mee helpen?</div>
             )}
-            {active?.messages.map((m) => (
+            {active?.messages.map((m, i, arr) => (
               <MessageView
                 key={m.id}
                 m={m}
                 onOpenArtifact={(a) => setOpenArtifact(a)}
                 artifacts={m.role === "assistant" ? extractArtifacts(m.id, m.content) : []}
+                isLast={i === arr.length - 1}
+                disabled={busy}
+                onEdit={editMessage}
+                onRegenerate={regenerate}
               />
             ))}
             {error && <div className="error">{error}</div>}
@@ -536,11 +600,22 @@ function MessageView({
   m,
   artifacts,
   onOpenArtifact,
+  isLast,
+  disabled,
+  onEdit,
+  onRegenerate,
 }: {
   m: ChatMessage;
   artifacts: Artifact[];
   onOpenArtifact: (a: Artifact) => void;
+  isLast: boolean;
+  disabled: boolean;
+  onEdit: (id: string, text: string) => void;
+  onRegenerate: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(m.content);
+
   return (
     <div className={`msg ${m.role}`}>
       <div className="bubble">
@@ -551,7 +626,24 @@ function MessageView({
             <div key={i} className="file">📄 {a.name}</div>
           ),
         )}
-        {m.role === "assistant" ? (
+        {m.role === "user" && editing ? (
+          <div className="edit-box">
+            <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={3} />
+            <div className="card-head">
+              <button className="ghost" onClick={() => setEditing(false)}>Annuleren</button>
+              <button
+                className="primary"
+                disabled={!draft.trim() || disabled}
+                onClick={() => {
+                  setEditing(false);
+                  onEdit(m.id, draft.trim());
+                }}
+              >
+                Opslaan en opnieuw
+              </button>
+            </div>
+          </div>
+        ) : m.role === "assistant" ? (
           m.content ? (
             <div className="markdown">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
@@ -587,9 +679,19 @@ function MessageView({
           </button>
         ))}
       </div>
-      {m.role === "assistant" && m.content && (
-        <button className="link" onClick={() => navigator.clipboard.writeText(m.content)}>Kopieer</button>
-      )}
+      <div className="msg-actions">
+        {m.role === "user" && !editing && (
+          <button className="link" disabled={disabled} onClick={() => { setDraft(m.content); setEditing(true); }}>
+            Bewerk
+          </button>
+        )}
+        {m.role === "assistant" && m.content && (
+          <button className="link" onClick={() => navigator.clipboard.writeText(m.content)}>Kopieer</button>
+        )}
+        {m.role === "assistant" && isLast && (
+          <button className="link" disabled={disabled} onClick={onRegenerate}>↻ Opnieuw</button>
+        )}
+      </div>
     </div>
   );
 }

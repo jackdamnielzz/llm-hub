@@ -162,3 +162,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .steps summary::before { content: "▸ "; }
 .steps[open] summary::before { content: "▾ "; }
 .steps ol { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; word-break: break-all; }
+
+.msg-actions { display: flex; gap: 10px; align-items: center; }
+.msg-actions .link:disabled { opacity: .4; }
+.edit-box { display: flex; flex-direction: column; gap: 8px; min-width: min(420px, 70vw); }
+.edit-box textarea { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; resize: vertical; }
