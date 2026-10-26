@@ -39,8 +39,14 @@ export const DEFAULT_PROVIDERS: ProviderConfig[] = [
     name: "OpenRouter",
     kind: "openai-compatible",
     baseUrl: "https://openrouter.ai/api/v1",
-    models: ["openrouter/auto"],
-    enabled: false,
+    models: [
+      "openrouter/auto",
+      "anthropic/claude-3.5-sonnet",
+      "openai/gpt-4o-mini",
+      "google/gemini-2.0-flash-001",
+      "meta-llama/llama-3.3-70b-instruct",
+    ],
+    enabled: true,
   },
   {
     id: "ollama",
