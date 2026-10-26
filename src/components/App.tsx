@@ -568,7 +568,13 @@ export default function App() {
       </main>
 
       {openArtifact && (
-        <ArtifactPanel key={openArtifact.id} artifact={openArtifact} onClose={() => setOpenArtifact(null)} />
+        <ArtifactPanel
+          key={openArtifact.id}
+          artifact={openArtifact}
+          providers={providers}
+          defaultKey={currentKey}
+          onClose={() => setOpenArtifact(null)}
+        />
       )}
 
       {showLibrary && (
@@ -722,11 +728,79 @@ function MessageView({
   );
 }
 
-function ArtifactPanel({ artifact, onClose }: { artifact: Artifact; onClose: () => void }) {
+function ArtifactPanel({
+  artifact,
+  providers,
+  defaultKey,
+  onClose,
+}: {
+  artifact: Artifact;
+  providers: ProviderConfig[];
+  defaultKey: string;
+  onClose: () => void;
+}) {
   const [mode, setMode] = useState<"preview" | "code">("preview");
   const [code, setCode] = useState(artifact.code);
+  const [modelKey, setModelKey] = useState(defaultKey);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const current: Artifact = { ...artifact, code };
   const edited = code !== artifact.code;
+  const modelOptions = providers
+    .filter((p) => p.enabled)
+    .flatMap((p) => p.models.map((m) => ({ key: `${p.id}|${m}`, label: `${p.name} · ${m}` })));
+
+  // Antwoord op llm.ask() uit de app: stuur het door naar het gekozen model met jouw key
+  useEffect(() => {
+    async function onMessage(e: MessageEvent) {
+      const frame = iframeRef.current?.contentWindow;
+      if (!frame || e.source !== frame) return;
+      const d = e.data;
+      if (!d || d.type !== "llm-ask") return;
+      const reply = (msg: Record<string, unknown>) => frame.postMessage({ type: "llm-res", id: d.id, ...msg }, "*");
+      try {
+        const sel = parseKey(modelKey);
+        const provider = sel && providers.find((p) => p.id === sel.providerId);
+        if (!sel || !provider) throw new Error("Kies eerst een model onder de artifact-knop.");
+        const apiKey = provider.apiKeyEnc ? await decryptSecret(provider.apiKeyEnc) : "";
+        const msgs = (Array.isArray(d.messages) ? d.messages : []) as { role: "user" | "assistant"; content: string }[];
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: provider.kind,
+            baseUrl: provider.baseUrl,
+            apiKey,
+            model: sel.model,
+            system: typeof d.system === "string" ? d.system : undefined,
+            messages: msgs.map((m) => ({ role: m.role, text: String(m.content) })),
+          }),
+        });
+        if (!res.ok || !res.body) throw new Error((await res.text()) || res.statusText);
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i: number;
+          while ((i = buf.indexOf("\n")) !== -1) {
+            const line = buf.slice(0, i);
+            buf = buf.slice(i + 1);
+            if (!line.trim()) continue;
+            const ev = JSON.parse(line);
+            if (ev.t === "text") reply({ chunk: ev.v });
+            if (ev.t === "error") throw new Error(ev.v);
+          }
+        }
+        reply({ done: true });
+      } catch (err) {
+        reply({ error: (err as Error).message });
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [modelKey, providers]);
 
   function download() {
     const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
@@ -741,7 +815,17 @@ function ArtifactPanel({ artifact, onClose }: { artifact: Artifact; onClose: () 
   return (
     <aside className="artifact-panel">
       <div className="artifact-head">
-        <span className="title">{artifact.title}{edited ? " ·  bewerkt" : ""}</span>
+        <span className="title">{artifact.title}{edited ? " · bewerkt" : ""}</span>
+        <select
+          className="artifact-model"
+          value={modelKey}
+          onChange={(e) => setModelKey(e.target.value)}
+          title="Model voor llm.ask() in deze app"
+        >
+          {modelOptions.map((o) => (
+            <option key={o.key} value={o.key}>{o.label}</option>
+          ))}
+        </select>
         <button className="ghost" onClick={() => setMode((m) => (m === "preview" ? "code" : "preview"))}>
           {mode === "preview" ? "Code" : "Voorbeeld"}
         </button>
@@ -759,8 +843,8 @@ function ArtifactPanel({ artifact, onClose }: { artifact: Artifact; onClose: () 
         ) : artifact.kind === "code" ? (
           <pre>{code}</pre>
         ) : (
-          // Sandbox zonder same-origin: de artifact kan niet bij cookies, localStorage of de API-keys
-          <iframe title={artifact.title} sandbox="allow-scripts" srcDoc={artifactSrcDoc(current)} />
+          // Sandbox zonder same-origin: de app kan niet bij cookies, localStorage of je keys
+          <iframe ref={iframeRef} title={artifact.title} sandbox="allow-scripts" srcDoc={artifactSrcDoc(current)} />
         )}
       </div>
     </aside>

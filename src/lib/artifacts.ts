@@ -54,9 +54,39 @@ export function fileNameFor(a: Artifact): string {
   return `${a.title.replace(/\s+/g, "-")}.${ext}`;
 }
 
+
+/** Script in de sandbox: geeft de app `llm.ask(...)` om het gekozen model aan te roepen. */
+export const LLM_BRIDGE = `<script>
+(function(){
+  var pending = {}, n = 0;
+  window.addEventListener('message', function(e){
+    var d = e.data; if (!d || d.type !== 'llm-res' || !pending[d.id]) return;
+    var p = pending[d.id];
+    if (d.chunk) { p.text += d.chunk; if (p.onChunk) p.onChunk(d.chunk); }
+    if (d.error) { delete pending[d.id]; p.reject(new Error(d.error)); }
+    if (d.done) { delete pending[d.id]; p.resolve(p.text); }
+  });
+  window.llm = {
+    ask: function(prompt, opts) {
+      opts = opts || {};
+      var messages = typeof prompt === 'string' ? [{ role: 'user', content: prompt }] : prompt;
+      var id = ++n;
+      return new Promise(function(resolve, reject) {
+        pending[id] = { text: '', onChunk: opts.onChunk, resolve: resolve, reject: reject };
+        parent.postMessage({ type: 'llm-ask', id: id, messages: messages, system: opts.system }, '*');
+      });
+    }
+  };
+})();
+</script>`;
+
 /** Bouwt het document dat in de sandbox-iframe wordt geladen. */
 export function artifactSrcDoc(a: Artifact): string {
-  if (a.kind === "html") return a.code;
+  if (a.kind === "html") {
+    // Bridge in de <head> zetten, zodat de doctype en quirks-mode niet veranderen
+    if (/<head[^>]*>/i.test(a.code)) return a.code.replace(/<head[^>]*>/i, (m) => m + LLM_BRIDGE);
+    return LLM_BRIDGE + a.code;
+  }
   if (a.kind === "svg") return `<!doctype html><html><body style="margin:0;background:#fff">${a.code}</body></html>`;
   if (a.kind === "mermaid") {
     return `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;padding:16px;background:#fff;font-family:system-ui}</style></head>
@@ -67,7 +97,7 @@ mermaid.initialize({ startOnLoad: true });
 </script></body></html>`;
   }
   if (a.kind === "react") {
-    return `<!doctype html><html><head><meta charset="utf-8">
+    return `<!doctype html><html><head><meta charset="utf-8">${LLM_BRIDGE}
 <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
