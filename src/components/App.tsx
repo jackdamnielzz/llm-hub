@@ -19,10 +19,11 @@ import {
 import { decryptSecret } from "@/lib/crypto";
 import { readFile } from "@/lib/files";
 import { uid } from "@/lib/id";
-import { extractArtifacts, artifactSrcDoc, type Artifact } from "@/lib/artifacts";
+import { extractArtifacts, artifactSrcDoc, fileNameFor, type Artifact } from "@/lib/artifacts";
 import SettingsDialog from "./SettingsDialog";
 import ModelsPanel from "./ModelsPanel";
 import AgentsPanel from "./AgentsPanel";
+import ArtifactsLibrary, { type LibraryItem } from "./ArtifactsLibrary";
 import ProjectDialog from "./ProjectDialog";
 
 interface Turn {
@@ -85,6 +86,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showModels, setShowModels] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentSel, setAgentSel] = useState("");
 
@@ -110,6 +112,17 @@ export default function App() {
   const active = useMemo(() => convs.find((c) => c.id === activeId) ?? null, [convs, activeId]);
   const project = useMemo(() => projects.find((p) => p.id === active?.projectId), [projects, active]);
   const useAgent = agents.find((a) => a.id === (active?.agentId ?? agentSel));
+  const library: LibraryItem[] = useMemo(
+    () =>
+      convs.flatMap((c) =>
+        c.messages.flatMap((m) =>
+          m.role === "assistant"
+            ? extractArtifacts(m.id, m.content).map((a) => ({ ...a, chatId: c.id, chatTitle: c.title }))
+            : [],
+        ),
+      ),
+    [convs],
+  );
 
   const modelOptions = useMemo(
     () =>
@@ -448,6 +461,7 @@ export default function App() {
           ))}
         </div>
 
+        <button className="ghost" onClick={() => { setShowLibrary(true); setSidebarOpen(false); }}>📦 Artifacts</button>
         <button className="ghost" onClick={() => { setShowAgents(true); setSidebarOpen(false); }}>🤖 Agenten</button>
         <button className="ghost" onClick={() => { setShowModels(true); setSidebarOpen(false); }}>🧩 Modellen</button>
         <button className="ghost" onClick={() => setShowSettings(true)}>⚙ Instellingen & API-keys</button>
@@ -554,7 +568,19 @@ export default function App() {
       </main>
 
       {openArtifact && (
-        <ArtifactPanel artifact={openArtifact} onClose={() => setOpenArtifact(null)} />
+        <ArtifactPanel key={openArtifact.id} artifact={openArtifact} onClose={() => setOpenArtifact(null)} />
+      )}
+
+      {showLibrary && (
+        <ArtifactsLibrary
+          items={library}
+          onClose={() => setShowLibrary(false)}
+          onOpen={(it) => {
+            setShowLibrary(false);
+            setActiveId(it.chatId);
+            setOpenArtifact(it);
+          }}
+        />
       )}
 
       {showAgents && (
@@ -697,21 +723,44 @@ function MessageView({
 }
 
 function ArtifactPanel({ artifact, onClose }: { artifact: Artifact; onClose: () => void }) {
-  const [showCode, setShowCode] = useState(false);
+  const [mode, setMode] = useState<"preview" | "code">("preview");
+  const [code, setCode] = useState(artifact.code);
+  const current: Artifact = { ...artifact, code };
+  const edited = code !== artifact.code;
+
+  function download() {
+    const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileNameFor(current);
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   return (
     <aside className="artifact-panel">
       <div className="artifact-head">
-        <span className="title">{artifact.title}</span>
-        <button className="ghost" onClick={() => setShowCode((s) => !s)}>{showCode ? "Voorbeeld" : "Code"}</button>
-        <button className="ghost" onClick={() => navigator.clipboard.writeText(artifact.code)}>Kopieer</button>
+        <span className="title">{artifact.title}{edited ? " ·  bewerkt" : ""}</span>
+        <button className="ghost" onClick={() => setMode((m) => (m === "preview" ? "code" : "preview"))}>
+          {mode === "preview" ? "Code" : "Voorbeeld"}
+        </button>
+        <button className="ghost" onClick={() => navigator.clipboard.writeText(code)}>Kopieer</button>
+        <button className="ghost" onClick={download}>⬇</button>
         <button className="icon" onClick={onClose}>✕</button>
       </div>
       <div className="artifact-body">
-        {showCode || artifact.kind === "code" ? (
-          <pre>{artifact.code}</pre>
+        {mode === "code" ? (
+          <textarea className="artifact-code" value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false} />
+        ) : artifact.kind === "markdown" ? (
+          <div className="artifact-doc markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{code}</ReactMarkdown>
+          </div>
+        ) : artifact.kind === "code" ? (
+          <pre>{code}</pre>
         ) : (
           // Sandbox zonder same-origin: de artifact kan niet bij cookies, localStorage of de API-keys
-          <iframe title={artifact.title} sandbox="allow-scripts" srcDoc={artifactSrcDoc(artifact)} />
+          <iframe title={artifact.title} sandbox="allow-scripts" srcDoc={artifactSrcDoc(current)} />
         )}
       </div>
     </aside>
