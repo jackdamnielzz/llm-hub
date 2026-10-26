@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Attachment, ChatMessage, Conversation, Project, ProviderConfig, ToolSettings } from "@/lib/types";
+import type { Agent, Attachment, ChatMessage, Conversation, Project, ProviderConfig, ToolSettings } from "@/lib/types";
 import {
+  loadAgents,
+  saveAgents,
   loadConversations,
   loadProjects,
   loadProviders,
@@ -20,6 +22,7 @@ import { uid } from "@/lib/id";
 import { extractArtifacts, artifactSrcDoc, type Artifact } from "@/lib/artifacts";
 import SettingsDialog from "./SettingsDialog";
 import ModelsPanel from "./ModelsPanel";
+import AgentsPanel from "./AgentsPanel";
 import ProjectDialog from "./ProjectDialog";
 
 interface Turn {
@@ -38,8 +41,9 @@ function parseKey(key: string): { providerId: string; model: string } | null {
   return { providerId: key.slice(0, i), model: key.slice(i + 1) };
 }
 
-function buildSystem(project: Project | undefined, webActive: boolean): string {
+function buildSystem(project: Project | undefined, webActive: boolean, agentPrompt?: string): string {
   const parts: string[] = [];
+  if (agentPrompt?.trim()) parts.push(agentPrompt.trim());
   if (project?.instructions.trim()) parts.push(project.instructions.trim());
   for (const f of project?.files ?? []) {
     if (f.text) parts.push(`--- Projectbestand: ${f.name} ---\n${f.text}`);
@@ -80,6 +84,9 @@ export default function App() {
   const [openArtifact, setOpenArtifact] = useState<Artifact | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showModels, setShowModels] = useState(false);
+  const [showAgents, setShowAgents] = useState(false);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentSel, setAgentSel] = useState("");
 
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -89,6 +96,7 @@ export default function App() {
     setTools(loadTools());
     setConvs(loadConversations());
     setProjects(loadProjects());
+    setAgents(loadAgents());
     setLoaded(true);
   }, []);
 
@@ -101,6 +109,7 @@ export default function App() {
 
   const active = useMemo(() => convs.find((c) => c.id === activeId) ?? null, [convs, activeId]);
   const project = useMemo(() => projects.find((p) => p.id === active?.projectId), [projects, active]);
+  const useAgent = agents.find((a) => a.id === (active?.agentId ?? agentSel));
 
   const modelOptions = useMemo(
     () =>
@@ -139,6 +148,29 @@ export default function App() {
     setPending([]);
     setError(null);
     setOpenArtifact(null);
+  }
+
+  function chooseAgent(id: string) {
+    setAgentSel(id);
+    if (active) {
+      const a = agents.find((x) => x.id === id);
+      setConvs((p) =>
+        p.map((c) =>
+          c.id !== active.id
+            ? c
+            : a
+              ? { ...c, agentId: id, providerId: a.providerId, model: a.model }
+              : { ...c, agentId: undefined },
+        ),
+      );
+    }
+    const a = agents.find((x) => x.id === id);
+    if (a) setModelKey(`${a.providerId}|${a.model}`);
+  }
+
+  function saveAgentList(a: Agent[]) {
+    setAgents(a);
+    saveAgents(a);
   }
 
   function changeModel(key: string) {
@@ -189,7 +221,7 @@ export default function App() {
       return;
     }
 
-    const webActive = tools.webSearchEnabled && !!tools.braveKeyEnc;
+    const webActive = (useAgent ? useAgent.webSearch : tools.webSearchEnabled) && !!tools.braveKeyEnc;
     const convId = active?.id ?? uid();
     const isNew = !active;
     const asstId = uid();
@@ -203,7 +235,7 @@ export default function App() {
     const asstMsg: ChatMessage = { id: asstId, role: "assistant", content: "", createdAt: Date.now() };
     const history = active?.messages ?? [];
     const turns = toTurns([...history, userMsg]);
-    const system = buildSystem(project, webActive);
+    const system = buildSystem(project, webActive, useAgent?.systemPrompt);
     const fallbackTitle = pending[0]?.name ?? "Nieuwe chat";
 
     setConvs((prev) => {
@@ -212,6 +244,7 @@ export default function App() {
             {
               id: convId,
               title: titleFrom(text, fallbackTitle),
+              agentId: agentSel || undefined,
               providerId: sel.providerId,
               model: sel.model,
               messages: [],
@@ -350,6 +383,7 @@ export default function App() {
                 className="item"
                 onClick={() => {
                   setActiveId(c.id);
+                  setAgentSel(c.agentId ?? "");
                   setSidebarOpen(false);
                   setError(null);
                   setOpenArtifact(null);
@@ -362,6 +396,7 @@ export default function App() {
           ))}
         </div>
 
+        <button className="ghost" onClick={() => { setShowAgents(true); setSidebarOpen(false); }}>🤖 Agenten</button>
         <button className="ghost" onClick={() => { setShowModels(true); setSidebarOpen(false); }}>🧩 Modellen</button>
         <button className="ghost" onClick={() => setShowSettings(true)}>⚙ Instellingen & API-keys</button>
       </aside>
@@ -369,6 +404,12 @@ export default function App() {
       <main className="main">
         <header className="topbar">
           <button className="menu-btn" aria-label="Menu" onClick={() => setSidebarOpen(true)}>☰</button>
+          <select value={active?.agentId ?? agentSel} onChange={(e) => chooseAgent(e.target.value)} title="Agent">
+            <option value="">Geen agent</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>🤖 {a.name}</option>
+            ))}
+          </select>
           <select value={currentKey} onChange={(e) => changeModel(e.target.value)}>
             {modelOptions.length === 0 && <option value="">Geen model beschikbaar</option>}
             {modelOptions.map((o) => (
@@ -458,6 +499,15 @@ export default function App() {
 
       {openArtifact && (
         <ArtifactPanel artifact={openArtifact} onClose={() => setOpenArtifact(null)} />
+      )}
+
+      {showAgents && (
+        <AgentsPanel
+          agents={agents}
+          providers={providers}
+          onSave={saveAgentList}
+          onClose={() => setShowAgents(false)}
+        />
       )}
 
       {showModels && (

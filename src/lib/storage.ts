@@ -1,4 +1,4 @@
-import type { Conversation, Project, ProviderConfig, ToolSettings } from "./types";
+import type { Agent, Conversation, Project, ProviderConfig, ToolSettings } from "./types";
 import { DEFAULT_PROVIDERS } from "./providers";
 
 const KEYS = {
@@ -6,6 +6,7 @@ const KEYS = {
   conversations: "llmhub.conversations",
   projects: "llmhub.projects",
   tools: "llmhub.tools",
+  agents: "llmhub.agents",
 };
 
 function read<T>(key: string, fallback: T): T {
@@ -32,5 +33,7 @@ export const loadConversations = () => read<Conversation[]>(KEYS.conversations, 
 export const saveConversations = (c: Conversation[]) => write(KEYS.conversations, c);
 export const loadProjects = () => read<Project[]>(KEYS.projects, []);
 export const saveProjects = (p: Project[]) => write(KEYS.projects, p);
+export const loadAgents = () => read<Agent[]>(KEYS.agents, []);
+export const saveAgents = (a: Agent[]) => write(KEYS.agents, a);
 export const loadTools = () => read<ToolSettings>(KEYS.tools, { webSearchEnabled: false });
 export const saveTools = (t: ToolSettings) => write(KEYS.tools, t);

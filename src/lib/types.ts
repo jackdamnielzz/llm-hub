@@ -31,8 +31,20 @@ export interface ChatMessage {
   sources?: { title: string; url: string }[];
 }
 
+export interface Agent {
+  id: string;
+  name: string;
+  description: string;
+  providerId: string;
+  model: string;
+  /** Eigen instructies voor de agent; gaan voor de projectinstructies */
+  systemPrompt: string;
+  webSearch: boolean;
+}
+
 export interface Conversation {
   id: string;
+  agentId?: string;
   title: string;
   projectId?: string;
   providerId: string;
