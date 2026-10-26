@@ -2,10 +2,17 @@
 
 import { useState } from "react";
 import type { ProviderConfig, ProviderKind, ToolSettings } from "@/lib/types";
-import { encryptSecret } from "@/lib/crypto";
+import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { uid } from "@/lib/id";
 
-type Draft = ProviderConfig & { newKey?: string; clearKey?: boolean; modelsText: string };
+type Draft = ProviderConfig & {
+  newKey?: string;
+  clearKey?: boolean;
+  modelsText: string;
+  fetching?: boolean;
+  fetchErr?: string;
+  filter?: string;
+};
 
 interface Props {
   providers: ProviderConfig[];
@@ -27,19 +34,47 @@ export default function SettingsDialog({ providers, tools, onSave, onClose }: Pr
   const update = (i: number, patch: Partial<Draft>) =>
     setDrafts((d) => d.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
-  const addCustom = () =>
-    setDrafts((d) => [
-      ...d,
-      {
-        id: `custom-${uid()}`,
-        name: "Eigen endpoint",
-        kind: "openai-compatible" as ProviderKind,
-        baseUrl: "https://",
-        models: [],
-        modelsText: "",
-        enabled: true,
-      },
-    ]);
+  function toggleModel(i: number, id: string) {
+    setDrafts((d) =>
+      d.map((x, j) => {
+        if (j !== i) return x;
+        const models = x.models.includes(id) ? x.models.filter((m) => m !== id) : [...x.models, id];
+        return { ...x, models, modelsText: models.join(", ") };
+      }),
+    );
+  }
+
+  function setAllVisible(i: number, ids: string[], on: boolean) {
+    setDrafts((d) =>
+      d.map((x, j) => {
+        if (j !== i) return x;
+        const set = new Set(x.models);
+        for (const id of ids) (on ? set.add(id) : set.delete(id));
+        const models = [...set];
+        return { ...x, models, modelsText: models.join(", ") };
+      }),
+    );
+  }
+
+  async function fetchModels(i: number) {
+    const d = drafts[i];
+    update(i, { fetching: true, fetchErr: undefined });
+    try {
+      // Gebruik een net ingevoerde key, anders de opgeslagen key
+      let apiKey = d.newKey?.trim() ?? "";
+      if (!apiKey && d.apiKeyEnc && !d.clearKey) apiKey = await decryptSecret(d.apiKeyEnc);
+      const res = await fetch("/api/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: d.kind, baseUrl: d.baseUrl, apiKey }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error ?? res.statusText);
+      update(i, { available: data.ids, fetching: false });
+    } catch (e) {
+      update(i, { fetching: false, fetchErr: (e as Error).message });
+    }
+  }
 
   async function save() {
     setSaving(true);
@@ -47,7 +82,7 @@ export default function SettingsDialog({ providers, tools, onSave, onClose }: Pr
     try {
       const out: ProviderConfig[] = [];
       for (const d of drafts) {
-        const { newKey, clearKey, modelsText, ...rest } = d;
+        const { newKey, clearKey, modelsText, fetching, fetchErr, filter, ...rest } = d;
         let apiKeyEnc = clearKey ? undefined : rest.apiKeyEnc;
         if (newKey?.trim()) apiKeyEnc = await encryptSecret(newKey.trim());
         out.push({
@@ -80,61 +115,117 @@ export default function SettingsDialog({ providers, tools, onSave, onClose }: Pr
             server van deze app. Ze worden niet in een database bewaard.
           </p>
 
-          {drafts.map((d, i) => (
-            <div className="card" key={d.id}>
-              <div className="card-head">
-                <input
-                  type="text"
-                  value={d.name}
-                  onChange={(e) => update(i, { name: e.target.value })}
-                  style={{ background: "none", border: 0, fontSize: 15 }}
-                />
-                <label className="check">
-                  <input type="checkbox" checked={d.enabled} onChange={(e) => update(i, { enabled: e.target.checked })} />
-                  Aan
-                </label>
-              </div>
-              <div className="field">
-                Base URL
-                <input value={d.baseUrl} onChange={(e) => update(i, { baseUrl: e.target.value })} />
-              </div>
-              <div className="field">
-                Type
-                <select value={d.kind} onChange={(e) => update(i, { kind: e.target.value as ProviderKind })}>
-                  <option value="anthropic">Anthropic (Messages API)</option>
-                  <option value="openai-compatible">OpenAI-compatibel (chat/completions)</option>
-                </select>
-              </div>
-              <div className="field">
-                Modellen (komma-gescheiden)
-                <input value={d.modelsText} onChange={(e) => update(i, { modelsText: e.target.value })} />
-              </div>
-              <div className="field">
-                API-key {d.apiKeyEnc && !d.clearKey ? "(opgeslagen, laat leeg om te behouden)" : ""}
-                <input
-                  type="password"
-                  autoComplete="off"
-                  placeholder={d.apiKeyEnc ? "••••••••" : "Plak je key"}
-                  value={d.newKey ?? ""}
-                  onChange={(e) => update(i, { newKey: e.target.value })}
-                />
-              </div>
-              <div className="card-head">
-                {d.apiKeyEnc && (
+          {drafts.map((d, i) => {
+            const filter = (d.filter ?? "").toLowerCase();
+            const visible = (d.available ?? []).filter((id) => id.toLowerCase().includes(filter));
+            return (
+              <div className="card" key={d.id}>
+                <div className="card-head">
+                  <input
+                    type="text"
+                    value={d.name}
+                    onChange={(e) => update(i, { name: e.target.value })}
+                    style={{ background: "none", border: 0, fontSize: 15 }}
+                  />
                   <label className="check">
-                    <input type="checkbox" checked={!!d.clearKey} onChange={(e) => update(i, { clearKey: e.target.checked })} />
-                    Key wissen
+                    <input type="checkbox" checked={d.enabled} onChange={(e) => update(i, { enabled: e.target.checked })} />
+                    Aan
                   </label>
-                )}
-                {d.id.startsWith("custom-") && (
-                  <button className="link" onClick={() => setDrafts((x) => x.filter((_, j) => j !== i))}>
-                    Verwijder endpoint
+                </div>
+                <div className="field">
+                  Base URL
+                  <input value={d.baseUrl} onChange={(e) => update(i, { baseUrl: e.target.value })} />
+                </div>
+                <div className="field">
+                  Type
+                  <select value={d.kind} onChange={(e) => update(i, { kind: e.target.value as ProviderKind })}>
+                    <option value="anthropic">Anthropic (Messages API)</option>
+                    <option value="openai-compatible">OpenAI-compatibel (chat/completions)</option>
+                  </select>
+                </div>
+                <div className="field">
+                  API-key {d.apiKeyEnc && !d.clearKey ? "(opgeslagen, laat leeg om te behouden)" : ""}
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    placeholder={d.apiKeyEnc ? "••••••••" : "Plak je key"}
+                    value={d.newKey ?? ""}
+                    onChange={(e) => update(i, { newKey: e.target.value })}
+                  />
+                </div>
+                <div className="card-head">
+                  {d.apiKeyEnc && (
+                    <label className="check">
+                      <input type="checkbox" checked={!!d.clearKey} onChange={(e) => update(i, { clearKey: e.target.checked })} />
+                      Key wissen
+                    </label>
+                  )}
+                  {d.id.startsWith("custom-") && (
+                    <button className="link" onClick={() => setDrafts((x) => x.filter((_, j) => j !== i))}>
+                      Verwijder endpoint
+                    </button>
+                  )}
+                </div>
+
+                <div className="card-head">
+                  <button className="ghost" onClick={() => fetchModels(i)} disabled={d.fetching}>
+                    {d.fetching ? "Ophalen…" : "Modellen ophalen"}
                   </button>
+                  {d.available && <span className="hint">{d.available.length} beschikbaar</span>}
+                </div>
+                {d.fetchErr && <div className="error">{d.fetchErr}</div>}
+
+                {d.available && d.available.length > 0 && (
+                  <div className="field">
+                    <input
+                      placeholder="Zoeken, bijv. claude of gpt"
+                      value={d.filter ?? ""}
+                      onChange={(e) => update(i, { filter: e.target.value })}
+                    />
+                    <div className="card-head">
+                      <button className="link" onClick={() => setAllVisible(i, visible, true)}>Alles zichtbare aan</button>
+                      <button className="link" onClick={() => setAllVisible(i, visible, false)}>Alles zichtbare uit</button>
+                    </div>
+                    <div className="model-list">
+                      {visible.map((id) => (
+                        <label className="check model-row" key={id}>
+                          <input type="checkbox" checked={d.models.includes(id)} onChange={() => toggleModel(i, id)} />
+                          {id}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="hint">
+                      {d.models.length} geselecteerd. Alleen deze verschijnen in de modelkeuze bovenin.
+                    </div>
+                  </div>
                 )}
+
+                <div className="field">
+                  Geselecteerde modellen (komma-gescheiden, of vul handmatig aan)
+                  <input value={d.modelsText} onChange={(e) => update(i, { modelsText: e.target.value })} />
+                </div>
               </div>
-            </div>
-          ))}
-          <button className="ghost" onClick={addCustom}>+ Eigen endpoint toevoegen</button>
+            );
+          })}
+          <button
+            className="ghost"
+            onClick={() =>
+              setDrafts((d) => [
+                ...d,
+                {
+                  id: `custom-${uid()}`,
+                  name: "Eigen endpoint",
+                  kind: "openai-compatible" as ProviderKind,
+                  baseUrl: "https://",
+                  models: [],
+                  modelsText: "",
+                  enabled: true,
+                },
+              ])
+            }
+          >
+            + Eigen endpoint toevoegen
+          </button>
 
           <div className="card">
             <div className="card-head">
@@ -145,8 +236,8 @@ export default function SettingsDialog({ providers, tools, onSave, onClose }: Pr
               </label>
             </div>
             <p className="hint">
-              Het model kan zoeken op het web (Brave Search API) en pagina's ophalen. Vraag een gratis of betaalde
-              key aan op brave.com/search/api. {tools.braveKeyEnc && !braveClear ? "Er staat al een key opgeslagen." : ""}
+              Het model kan zoeken op het web (Brave Search API) en pagina's ophalen. Vraag een key aan op
+              brave.com/search/api. {tools.braveKeyEnc && !braveClear ? "Er staat al een key opgeslagen." : ""}
             </p>
             <div className="field">
               Brave Search API-key

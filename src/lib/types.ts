@@ -5,7 +5,10 @@ export interface ProviderConfig {
   name: string;
   kind: ProviderKind;
   baseUrl: string;
+  /** Enabled models that show up in the model picker */
   models: string[];
+  /** Full list fetched from the provider (may be large) */
+  available?: string[];
   enabled: boolean;
   /** AES-GCM versleuteld met een sleutel die in IndexedDB van deze browser staat */
   apiKeyEnc?: string;
